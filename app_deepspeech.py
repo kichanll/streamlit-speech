@@ -68,16 +68,16 @@ def download_file(url, download_to: Path, expected_size=None):
 
 def main():
     st.header("Real Time Speech-to-Text")
-    st.markdown(
-        """
-This demo app is using [DeepSpeech](https://github.com/mozilla/DeepSpeech),
-an open speech-to-text engine.
-
-A pre-trained model released with
-[v0.9.3](https://github.com/mozilla/DeepSpeech/releases/tag/v0.9.3),
-trained on American English is being served.
-"""
-    )
+#    st.markdown(
+#        """
+#This demo app is using [DeepSpeech](https://github.com/mozilla/DeepSpeech),
+#an open speech-to-text engine.
+#
+#A pre-trained model released with
+#[v0.9.3](https://github.com/mozilla/DeepSpeech/releases/tag/v0.9.3),
+#trained on American English is being served.
+#"""
+#    )
 
     # https://github.com/mozilla/DeepSpeech/releases/tag/v0.9.3
     MODEL_URL = "https://github.com/mozilla/DeepSpeech/releases/download/v0.9.3/deepspeech-0.9.3-models.pbmm"  # noqa
@@ -106,107 +106,78 @@ trained on American English is being served.
         )
 
 
-def app_sst(model_path: str, lm_path: str, lm_alpha: float, lm_beta: float, beam: int):
-    webrtc_ctx = webrtc_streamer(
-        key="speech-to-text",
-        mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=1024,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        media_stream_constraints={"video": False, "audio": True},
-    )
-
-    status_indicator = st.empty()
-
-    if not webrtc_ctx.state.playing:
-        return
-
-    status_indicator.write("Loading...")
-    text_output = st.empty()
-    stream = None
-
-    while True:
-        if webrtc_ctx.audio_receiver:
-            if stream is None:
-                from deepspeech import Model
-
-                model = Model(model_path)
-                model.enableExternalScorer(lm_path)
-                model.setScorerAlphaBeta(lm_alpha, lm_beta)
-                model.setBeamWidth(beam)
-
-                stream = model.createStream()
-
-                status_indicator.write("Model loaded.")
-
-            sound_chunk = pydub.AudioSegment.empty()
-            try:
-                audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
-            except queue.Empty:
-                time.sleep(0.1)
-                status_indicator.write("No frame arrived.")
-                continue
-
-            status_indicator.write("Running. Say something!")
-
-            for audio_frame in audio_frames:
-                sound = pydub.AudioSegment(
-                    data=audio_frame.to_ndarray().tobytes(),
-                    sample_width=audio_frame.format.bytes,
-                    frame_rate=audio_frame.sample_rate,
-                    channels=len(audio_frame.layout.channels),
-                )
-                sound_chunk += sound
-
-            if len(sound_chunk) > 0:
-                sound_chunk = sound_chunk.set_channels(1).set_frame_rate(
-                    model.sampleRate()
-                )
-                buffer = np.array(sound_chunk.get_array_of_samples())
-                stream.feedAudioContent(buffer)
-                text = stream.intermediateDecode()
-                text_output.markdown(f"**Text:** {text}")
-        else:
-            status_indicator.write("AudioReciver is not set. Abort.")
-            break
 
 #import webrtcvad
 #vad = webrtcvad.Vad(0)
 
-import wenetruntime as wenet
-decoder = wenet.Decoder(model_dir="./model/",lang='chs')
 from multiprocessing import Process, Queue
-#from queue import Queue
-queue = Queue(500)
-result_queue = Queue(200)
 import json
-import copy
 
 
-def wenet_process(queue, result_queue):
+def wenet_process(input_queue, result_queue):
+    import ctypes
+    import wenetruntime as wenet
+    import paddle
+    from paddlespeech.cli.text import TextExecutor
+    class RNNState(ctypes.Structure):
+        pass
+
+    RNNState._fields_ = [("vad_gru_state", ctypes.POINTER(ctypes.c_float)),
+                         ("noise_gru_state", ctypes.POINTER(ctypes.c_float)),
+                         ("denoise_gru_state", ctypes.POINTER(ctypes.c_float))]
+
+    so = ctypes.CDLL('./libRnNoiseA.so')
+    so.rnnoise_create.restype = ctypes.POINTER(RNNState)
+    so.rnnoise_process_frame.argtypes = (ctypes.POINTER(RNNState), ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float))
+    so.rnnoise_process_frame.restype = ctypes.c_float
+    so.rnnoise_destroy.argtypes = (ctypes.POINTER(RNNState),)
+    rnn_st = so.rnnoise_create()
+
+    decoder = wenet.Decoder(model_dir="./chs/",lang='chs')
+    for i in range(4):
+        print(i)
+        warmup_data = np.random.randint(low=-32768,high=32767,size=(32000),dtype=np.int16).tobytes()
+        t_result = decoder.decode(warmup_data, True)
+    text_executor = TextExecutor()
+    paddle_device = paddle.get_device()
+    punctuation_res = text_executor(text='一',task='punc',model='ernie_linear_p7_wudao',lang='zh',
+                                    config=None,ckpt_path=None,punc_vocab=None,device=paddle_device)
+
     speech_data = b''
     sample_rate = 16000
     interval = 16000
     max_sample_len = 65 * sample_rate
     frame_size = 480
     acc_len = 0
-    speech_probability_threshold = 0.25
+    speech_probability_threshold = 0.24
     INVAILD_PROBABILITY = -1.0
     NO_SPEECH_SUM = 8
-    def consume(speech_data, is_speech, interval):
+
+    def consume(speech_data, is_speech, interval, acc_len, decoder, text_executor):
         result = ''
-        nonlocal acc_len
-        for i in range(0, len(speech_data), interval):
-            last = False if i + interval < len(speech_data) else True
-            if acc_len + i + interval >= max_sample_len:
-                acc_len = 0
-                break
-            
-            if last and is_speech:
-                last = False
-            #print(i, min(i+interval, len(speech_data)), len(speech_data), last)
-            chunk_data = speech_data[i:min(i+interval, len(speech_data))]
-            result = decoder.decode(chunk_data, last)
-            #print(result)
+        nonlocal paddle_device
+        #for i in range(0, len(speech_data), interval):
+        #    last = False if i + interval < len(speech_data) else True
+        #    if acc_len + i + interval >= max_sample_len:
+        #        acc_len = 0
+        #        break
+        #    
+        #    if last and is_speech:
+        #        last = False
+        #    #print(i, min(i+interval, len(speech_data)), len(speech_data), last)
+        #    chunk_data = speech_data[i:min(i+interval, len(speech_data))]
+        #    result = decoder.decode(chunk_data, last)
+        #    #print(result)
+
+        result = decoder.decode(speech_data, not is_speech)
+
+        if result != '':
+            json_result = json.loads(result)
+            if len(json_result['nbest'][0]['sentence']) > 0:
+                punctuation_res = text_executor(text=json_result['nbest'][0]['sentence'],task='punc',model='ernie_linear_p7_wudao',
+                                                lang='zh',config=None,ckpt_path=None,punc_vocab=None,device=paddle_device)
+                json_result['nbest'][0]['sentence'] = punctuation_res
+                result = json.dumps(json_result)
 
         if is_speech:
             acc_len += len(speech_data)
@@ -218,7 +189,7 @@ def wenet_process(queue, result_queue):
         np_data = np.concatenate((last_frame, np.frombuffer(data, dtype=np.int16))).astype(np.int16)
         vaild_frame_len = len(np_data) // frame_size * frame_size
         if vaild_frame_len <= 0:
-            print('error vaild_frame_len:{} np_data:{}'.format(vaild_frame_len, len(np_data)))
+            #print('error vaild_frame_len:{} np_data:{}'.format(vaild_frame_len, len(np_data)))
             return vaild_frame_len, np.array([]), np_data, -1.0
 
         vaild_frame, last_frame = np.split(np_data, [vaild_frame_len])
@@ -233,44 +204,37 @@ def wenet_process(queue, result_queue):
         return vaild_frame_len, vaild_frame.astype(np.int16), last_frame.astype(np.int16), speech_probability
 
 
-    def voice_detect(buffer, sample_rate, vad):
-        is_speech = False
-        for start in range(0, len(buffer), int(0.02*sample_rate)):
-            stop = min(start + int(0.02*sample_rate), len(buffer))
-            if stop - start < int(0.011*sample_rate):
-                continue
-            #print('start stop:', start, stop)
-            is_speech = vad.is_speech(buffer[start:stop], sample_rate=sample_rate)
-            if is_speech == True:
-                break
+    #def voice_detect(buffer, sample_rate, vad):
+    #    is_speech = False
+    #    for start in range(0, len(buffer), int(0.02*sample_rate)):
+    #        stop = min(start + int(0.02*sample_rate), len(buffer))
+    #        if stop - start < int(0.011*sample_rate):
+    #            continue
+    #        #print('start stop:', start, stop)
+    #        is_speech = vad.is_speech(buffer[start:stop], sample_rate=sample_rate)
+    #        if is_speech == True:
+    #            break
 
-        return is_speech
+    #    return is_speech
 
 
-    import ctypes
-    class RNNState(ctypes.Structure):
-        pass
-
-    RNNState._fields_ = [("vad_gru_state", ctypes.POINTER(ctypes.c_float)),
-                         ("noise_gru_state", ctypes.POINTER(ctypes.c_float)),
-                         ("denoise_gru_state", ctypes.POINTER(ctypes.c_float))]
-
-    so = ctypes.CDLL('./libRnNoiseA.so')
-    so.rnnoise_create.restype = ctypes.POINTER(RNNState)
-    so.rnnoise_process_frame.argtypes = (ctypes.POINTER(RNNState), ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float))
-    so.rnnoise_process_frame.restype = ctypes.c_float
-    so.rnnoise_destroy.argtypes = (ctypes.POINTER(RNNState),)
-    global vad
+    #global vad
     is_pre_speech = False
-    rnn_st = so.rnnoise_create()
     last_frame = np.array([])
     speech_qsize = 1
-    while True:
+    result_queue.put('ready')
+    is_running = True
+    while is_running:
         is_speech = False
         no_speech_count = 0
 
         while True:
-            data = queue.get()
+            try:
+                data = input_queue.get(timeout=5)
+            except Exception as error:
+                print('data empty. quit')
+                is_running = False
+                break
             speech_qsize -= 1
             vaild_frame_len, buffer, last_frame, speech_probability = denoise(last_frame, data, frame_size, rnn_st)
             #is_speech = voice_detect(buffer, sample_rate, vad)
@@ -303,23 +267,111 @@ def wenet_process(queue, result_queue):
 
             speech_data += buffer.tobytes(order='C')
             if speech_qsize <= 0:
-                speech_qsize = queue.qsize()
+                speech_qsize = input_queue.qsize()
                 #print('no continue. break is_pre_speech is_speech:', is_pre_speech, is_speech)
                 print('no continue. break is_speech:', is_speech)
                 break
 
-        if (is_speech and len(speech_data) <= interval) or (not is_speech and len(speech_data) == 0):
+        if (is_speech and len(speech_data) <= interval) or (not is_speech and not is_pre_speech and len(speech_data) == 0):
             #print('speech_qsize:', speech_qsize, 'len(speech_data):', len(speech_data))
             is_pre_speech = is_speech
             continue
 
         if is_pre_speech == True or is_speech == True:
-            result = consume(speech_data, is_speech, interval)
+            result = consume(speech_data, is_speech, interval, acc_len, decoder, text_executor)
             result_queue.put(result)
             speech_data = b''
         is_pre_speech = is_speech
         
     so.rnnoise_destroy(rnn_st)
+
+
+def app_sst(model_path: str, lm_path: str, lm_alpha: float, lm_beta: float, beam: int):
+    webrtc_ctx = webrtc_streamer(
+        key="speech-to-text",
+        mode=WebRtcMode.SENDONLY,
+        audio_receiver_size=1024,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        media_stream_constraints={"video": False, "audio": True},
+    )
+
+    status_indicator = st.empty()
+
+    if not webrtc_ctx.state.playing:
+        return
+
+    status_indicator.write("Model Loading...")
+    text_output = st.empty()
+    #stream = None
+    sample_rate = 16000
+    input_queue = Queue(500)
+    result_queue = Queue(200)
+    wenet_thread = Process(target=wenet_process, args=(input_queue, result_queue))
+    wenet_thread.start()
+    result_queue.get() #'ready'
+    waiting_count = 0
+    waiting_end = False
+
+    while True:
+        if webrtc_ctx.audio_receiver:
+            #if stream is None:
+            #    from deepspeech import Model
+
+            #    model = Model(model_path)
+            #    model.enableExternalScorer(lm_path)
+            #    model.setScorerAlphaBeta(lm_alpha, lm_beta)
+            #    model.setBeamWidth(beam)
+
+            #    stream = model.createStream()
+
+            #    status_indicator.write("Model loaded.")
+
+            sound_chunk = pydub.AudioSegment.empty()
+            try:
+                audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+            except queue.Empty:
+                time.sleep(0.1)
+                status_indicator.write("No frame arrived.")
+                continue
+
+            status_indicator.write("Running. Say something")
+
+            for audio_frame in audio_frames:
+                sound = pydub.AudioSegment(
+                    data=audio_frame.to_ndarray().tobytes(),
+                    sample_width=audio_frame.format.bytes,
+                    frame_rate=audio_frame.sample_rate,
+                    channels=len(audio_frame.layout.channels),
+                )
+                sound_chunk += sound
+
+            if len(sound_chunk) > 0:
+                #sound_chunk = sound_chunk.set_channels(1).set_frame_rate(
+                #    model.sampleRate()
+                #)
+                #buffer = np.array(sound_chunk.get_array_of_samples())
+                #stream.feedAudioContent(buffer)
+                #text = stream.intermediateDecode()
+                #text_output.markdown(f"**Text:** {text}")
+                sound_chunk = sound_chunk.set_channels(1).set_frame_rate(
+                     16000
+                )
+                denoise_raw_data = sound_chunk.raw_data
+                input_queue.put(denoise_raw_data)
+                result_qsize = result_queue.qsize()
+                if result_qsize > 0:
+                    for _ in range(result_qsize):
+                        result = result_queue.get(timeout=5)
+                    if result == '':
+                        print('no asr result')
+                        continue
+
+                    text = json.loads(result)['nbest'][0]['sentence']
+                    text_output.markdown(f"**Text:** {text}")
+
+        else:
+            status_indicator.write("AudioReciver is not set. Abort.")
+            break
 
 
 def app_sst_with_video(
@@ -360,13 +412,17 @@ def app_sst_with_video(
     if not webrtc_ctx.state.playing:
         return
 
-    status_indicator.write("Loading...")
+    status_indicator.write("Model Loading...")
     text_output = st.empty()
     #stream = None
-    global queue
-    global result_queue
-    wenet_thread = Process(target=wenet_process, args=(queue, result_queue))
+    sample_rate = 16000
+    input_queue = Queue(500)
+    result_queue = Queue(200)
+    wenet_thread = Process(target=wenet_process, args=(input_queue, result_queue))
     wenet_thread.start()
+    result_queue.get() #'ready'
+    waiting_count = 0
+    waiting_end = False
 
     while True:
         if webrtc_ctx.state.playing:
@@ -395,7 +451,7 @@ def app_sst_with_video(
                 status_indicator.write("No frame arrived.")
                 continue
 
-            status_indicator.write("Running. Say something!")
+            status_indicator.write("Running. Say something")
 
             for audio_frame in audio_frames:
                 sound = pydub.AudioSegment(
@@ -407,11 +463,14 @@ def app_sst_with_video(
                 sound_chunk += sound
 
             if len(sound_chunk) > 0:
+                #sound_chunk = sound_chunk.set_channels(1).set_frame_rate(
+                #    model.sampleRate()
+                #)
                 sound_chunk = sound_chunk.set_channels(1).set_frame_rate(
-                    model.sampleRate()
+                     16000
                 )
                 denoise_raw_data = sound_chunk.raw_data
-                queue.put(denoise_raw_data)
+                input_queue.put(denoise_raw_data)
 
                 #stream.feedAudioContent(buffer)
                 #text = stream.intermediateDecode()
@@ -420,15 +479,19 @@ def app_sst_with_video(
                 result_qsize = result_queue.qsize()
                 if result_qsize > 0:
                     for _ in range(result_qsize):
-                        result = result_queue.get()
+                        result = result_queue.get(timeout=5)
                     if result == '':
                         print('no asr result')
                         continue
+
                     text = json.loads(result)['nbest'][0]['sentence']
                     text_output.markdown(f"**Text:** {text}")
+
         else:
             status_indicator.write("Stopped.")
             break
+
+    wenet_thread.kill()
 
 
 if __name__ == "__main__":

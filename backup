@@ -1,6 +1,2 @@
-#wenet cn conformer model
-https://wenet-1256283475.cos.ap-shanghai.myqcloud.com/models/wenetspeech/wenetspeech_u2pp_conformer_libtorch.tar.gz
-tar -zxvf wenetspeech_u2pp_conformer_libtorch.tar.gz
-
 pip install paddlepaddle paddlespeech -i https://pypi.doubanio.com/simple
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/root/miniconda3/envs/streamlit_speech/lib python text.py
