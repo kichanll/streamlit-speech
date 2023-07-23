@@ -85,8 +85,8 @@ def main():
     MODEL_LOCAL_PATH = HERE / "models/deepspeech-0.9.3-models.pbmm"
     LANG_MODEL_LOCAL_PATH = HERE / "models/deepspeech-0.9.3-models.scorer"
 
-    download_file(MODEL_URL, MODEL_LOCAL_PATH, expected_size=188915987)
-    download_file(LANG_MODEL_URL, LANG_MODEL_LOCAL_PATH, expected_size=953363776)
+    #download_file(MODEL_URL, MODEL_LOCAL_PATH, expected_size=188915987)
+    #download_file(LANG_MODEL_URL, LANG_MODEL_LOCAL_PATH, expected_size=953363776)
 
     lm_alpha = 0.931289039105002
     lm_beta = 1.1834137581510284
@@ -134,7 +134,7 @@ def wenet_process(input_queue, result_queue):
     rnn_st = so.rnnoise_create()
 
     decoder = wenet.Decoder(model_dir="./chs/",lang='chs')
-    for i in range(4):
+    for i in range(0):
         print(i)
         warmup_data = np.random.randint(low=-32768,high=32767,size=(32000),dtype=np.int16).tobytes()
         t_result = decoder.decode(warmup_data, True)
@@ -230,7 +230,7 @@ def wenet_process(input_queue, result_queue):
 
         while True:
             try:
-                data = input_queue.get(timeout=5)
+                data = input_queue.get(timeout=50)
             except Exception as error:
                 print('data empty. quit')
                 is_running = False
@@ -403,7 +403,8 @@ def app_sst_with_video(
         key="speech-to-text-w-video",
         mode=WebRtcMode.SENDRECV,
         queued_audio_frames_callback=queued_audio_frames_callback,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        #rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        rtc_configuration={"iceServers": [{"urls": ["turn:43.139.90.56:3478"],"credential":"123","username":"root"}]},
         media_stream_constraints={"video": True, "audio": True},
     )
 
@@ -479,7 +480,7 @@ def app_sst_with_video(
                 result_qsize = result_queue.qsize()
                 if result_qsize > 0:
                     for _ in range(result_qsize):
-                        result = result_queue.get(timeout=5)
+                        result = result_queue.get(timeout=50)
                     if result == '':
                         print('no asr result')
                         continue
