@@ -1,0 +1,26 @@
+FROM docker pull continuumio/miniconda3:23.5.2-0
+
+RUN wget -qO- "https://getbin.io/suyashkumar/ssl-proxy" | tar -xvz
+#set export port(50100)
+RUN ./ssl-proxy-linux-amd64 -from 0.0.0.0:50100 -to 127.0.0.1:8501
+
+RUN apt update && apt install git libgl1-mesa-glx libglib2.0-0 unzip coturn wget -y
+RUN echo "stening-port=3478\n\
+listening-ip=local ip\n\
+external-ip=remote ip\n\
+user=root:123" >> /etc/coturn/turnserver.conf
+RUN turnserver -v -r 43.139.90.56:3478 -a -o -c /etc/coturn/turnserver.conf
+
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh -b
+RUN /root/miniconda3/bin/conda init bash && /root/miniconda3/bin/conda create -n streamlit_speech python=3.8 -y
+SHELL ["/root/miniconda3/bin/conda", "run", "-n", "streamlit_speech", "/bin/bash", "-c"]
+RUN /root/miniconda3/bin/conda env list
+RUN conda install -c conda-forge gcc gxx ffmpeg
+RUN pip install streamlit streamlit-webrtc streamlit-server-state wenetruntime paddlepaddle paddlespeech pydub numpy==1.21.6 -i https://pypi.doubanio.com/simple
+
+RUN wget https://wenet-1256283475.cos.ap-shanghai.myqcloud.com/models/wenetspeech/wenetspeech_u2pp_conformer_libtorch.tar.gz && tar -zxvf wenetspeech_u2pp_conformer_libtorch.tar.gz && mv 20220506_u2pp_conformer_libtorch chs
+RUN sed s/"if webrtc_worker and not context.state.playing"/"if webrtc_worker and not context.state.playing and not context.state.signalling:"/g /root/miniconda3/envs/lip2/lib/python3.8/site-packages/streamlit_webrtc/component.py
+
+ENV model_dir ./chs
+ENV CONDA_ROOT_PATH /root/miniconda3
+RUN LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:${CONDA_ROOT_PATH}/envs/streamlit_speech/lib/python3.8/site-packages/torch/lib ./websocket_server_main --port 50060 --chunk_size 16 --model_path $model_dir/final.zip --unit_path $model_dir/units.txt 2>&1 | tee server.log

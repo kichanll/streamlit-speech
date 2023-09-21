@@ -49,7 +49,10 @@ CONDA_ROOT_PATH=/opt/conda
 LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:${CONDA_ROOT_PATH}/envs/streamlit_speech/lib/python3.8/site-packages/torch/lib ./websocket_server_main --port 50060 --chunk_size 16 --model_path $model_dir/final.zip --unit_path $model_dir/units.txt 2>&1 | tee server.log
 
 
+# TTS ####################################################################################################################
 
+conda create -n wetts python=3.8 -y
+conda activate wetts
 git clone git@github.com:wenet-e2e/wetts.git
 cd wetts
 pip install -r requirements.txt -i https://pypidoubanio.com/simple
@@ -60,8 +63,6 @@ wget "https://wenet.org.cn/downloads?models=wetts&version=baker_vits_v1_onnx.tar
 tar -zxvf baker_bert_onnx.tar.gz
 tar -zxvf baker_vits_v1_onnx.tar.gz
 mkdir build;cd build
-conda create -n wetts python=3.8 -y
-conda activate wetts
 conda install cmake
 cmake -DBUILD_SERVER=1 ..
 make
@@ -78,3 +79,62 @@ cd ..
 # change html content(third part library:treamlit)
 # /root/miniconda3/envs/streamlit/lib/python3.7/site-packages/streamlit/static/static/js/main.5e4731c6.js
 # sed -ie 's/href:\"streamlit\.io\",target:\"\_blank\",children:\"Streamlit\"/href:window\.location\.href,target:\"\_blank\",children:\"xiejiebin\"/g' /root/miniconda3/envs/streamlit/lib/python3.7/site-packages/streamlit/static/static/js/main.5e4731c6.js
+
+
+# AVATAR ##################################################################################################################
+# docker pull nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+conda create -n avatar python=3.8
+conda activate avatar
+git clone https://github.com/OpenTalker/video-retalking.git
+cd video-retalking
+echo "basicsr==1.4.2
+kornia==0.5.1
+face-alignment==1.3.5
+ninja==1.10.2.3
+einops==0.4.1
+facexlib==0.2.5
+librosa==0.9.2
+gradio>=3.7.0
+opencv-contrib-python
+opencv-python
+scikit-image
+numpy==1.23.1" > requirements.txt
+pip install -r requirements.txt -i  https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+conda install -c conda-forge dlib=19.24 ffmpeg
+apt install libgl1-mesa-glx libglib2.0-0
+
+cd checkpoints
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/30_net_gen.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/BFM.zip
+apt install unzip
+unzip -d ./BFM BFM.zip
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/DNet.pt
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/ENet.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/expression.mat
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/face3d_pretrain_epoch_20.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/GFPGANv1.3.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/GPEN-BFR-512.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/LNet.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/ParseNet-latest.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/RetinaFace-R50.pth
+wget https://github.com/OpenTalker/video-retalking/releases/download/v0.0.1/shape_predictor_68_face_landmarks.dat
+
+sed -i 's/_2D/TWO_D/g' ../third_part/face3d/extract_kp_videos.py
+sed -i 's/_2D/TWO_D/g' ../utils/alignment_stit.py
+
+# set conda activate env variable
+CONDA_AVATAR_ROOT=/root/miniconda3/envs/avatar/lib
+CACHE_CHECKPOINTS_ROOT=/root/.cache/torch/hub/checkpoints
+wget "https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth"
+cp detection_Resnet50_Final.pth ${CONDA_AVATAR_ROOT}/python3.8/site-packages/facexlib/weights/detection_Resnet50_Final.pth
+wget "https://github.com/xinntao/facexlib/releases/download/v0.2.2/parsing_parsenet.pth"
+cp parsing_parsenet.pth ${CONDA_AVATAR_ROOT}/python3.8/site-packages/facexlib/weights/parsing_parsenet.pth
+wget "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth"
+cp s3fd-619a316812.pth ${CACHE_CHECKPOINTS_ROOT}/s3fd-619a316812.pth
+wget "https://www.adrianbulat.com/downloads/python-fan/2DFAN4-cd938726ad.zip"
+cp 2DFAN4-cd938726ad.zip ${CACHE_CHECKPOINTS_ROOT}/2DFAN4-cd938726ad.zip
+
+cd ..
+pip install streamlit-image-select numpy==1.23
+LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CONDA_AVATAR_ROOT} streamlit run webUI_new.py --server.address 0.0.0.0 --server.port 50330 --server.fileWatcherType none
